@@ -97,8 +97,8 @@ fun:__fxstat=custom
 
 # getc may be implemented as a macro
 ## some getc may be optimizted to __uflow ..
-# fun:getc=uninstrumented
-# fun:getc=custom
+fun:getc=uninstrumented
+fun:getc=custom
 fun:_IO_getc=uninstrumented
 fun:_IO_getc=custom
 # fun:getchar=uninstrumented
@@ -220,3 +220,16 @@ fun:getrandom=discard
 
 fun:fcntl64=uninstrumented
 fun:fcntl64=discard
+fun:explicit_bzero=uninstrumented
+fun:explicit_bzero=discard
+
+fun:lseek64=discard
+fun:pread64=custom
+
+fun:atoi=custom
+fun:atol=custom
+fun:atoll=custom
+fun:atof=custom
+
+fun:pthread_rwlock_rdlock=discard
+fun:__pthread_rwlock_rdlock=discard

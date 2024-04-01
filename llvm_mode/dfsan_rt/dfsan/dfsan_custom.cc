@@ -550,6 +550,7 @@ char *__dfsw_stpcpy(char *dest, const char *src, dfsan_label dst_label,
   return ret;
 }
 
+
 SANITIZER_INTERFACE_ATTRIBUTE
 long int __dfsw_strtol(const char *nptr, char **endptr, int base,
                        dfsan_label nptr_label, dfsan_label endptr_label,

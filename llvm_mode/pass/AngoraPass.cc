@@ -1,26 +1,31 @@
+#include <fstream>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DebugInfo.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ValueMap.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include <fstream>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 
 #include "./abilist.h"
-#include "./defs.h"
 #include "./debug.h"
+#include "./defs.h"
+#include "./util.h"
 #include "./version.h"
 
 using namespace llvm;
@@ -95,19 +100,12 @@ public:
   GlobalVariable *AngoraCallSite;
   GlobalVariable *ParmeSanIndCallSite;
 
-  Constant *TraceCmp;
-  Constant *TraceSw;
-  Constant *TraceCmpTT;
-  Constant *TraceSwTT;
-  Constant *TraceFnTT;
-  Constant *TraceExploitTT;
-
-  FunctionType *TraceCmpTy;
-  FunctionType *TraceSwTy;
-  FunctionType *TraceCmpTtTy;
-  FunctionType *TraceSwTtTy;
-  FunctionType *TraceFnTtTy;
-  FunctionType *TraceExploitTtTy;
+  FunctionCallee TraceCmp;
+  FunctionCallee TraceSw;
+  FunctionCallee TraceCmpTT;
+  FunctionCallee TraceSwTT;
+  FunctionCallee TraceFnTT;
+  FunctionCallee TraceExploitTT;
 
   // Custom setting
   AngoraABIList ABIList;
@@ -146,6 +144,7 @@ public:
   void addFnWrap(Function &F);
   void collectPreviousIndirectBranch(Instruction *Inst, SmallPtrSet<Instruction *, 16> *);
   void resetIndirectCallContext(IRBuilder<> *IRB);
+
 };
 
 } // namespace
@@ -208,7 +207,6 @@ u32 AngoraLLVMPass::getInstructionId(Instruction *Inst) {
     }
   }
 
-  // Store mappings
   IdMap[Inst] = h;
 
   return h;
@@ -236,7 +234,7 @@ void AngoraLLVMPass::initVariables(Module &M) {
     errs() << "Input is LLVM bitcode\n";
   }
 
-  char* inst_ratio_str = getenv("ANGORA_INST_RATIO");
+  char *inst_ratio_str = getenv("ANGORA_INST_RATIO");
   if (inst_ratio_str) {
     if (sscanf(inst_ratio_str, "%u", &inst_ratio) != 1 || !inst_ratio ||
         inst_ratio > 100)
@@ -268,15 +266,16 @@ void AngoraLLVMPass::initVariables(Module &M) {
                          ConstantInt::get(Int32Ty, 0), "__angora_context", 0,
                          GlobalVariable::GeneralDynamicTLSModel, 0, false);
 
-  AngoraCallSite = new GlobalVariable(
-      M, Int32Ty, false, GlobalValue::CommonLinkage, 
-      ConstantInt::get(Int32Ty, 0), "__angora_call_site", 0, 
-      GlobalVariable::GeneralDynamicTLSModel, 0, false);
+  AngoraCallSite =
+      new GlobalVariable(M, Int32Ty, false, GlobalValue::CommonLinkage,
+                         ConstantInt::get(Int32Ty, 0), "__angora_call_site", 0,
+                         GlobalVariable::GeneralDynamicTLSModel, 0, false);
 
   ParmeSanIndCallSite = new GlobalVariable(
-      M, Int32Ty, false, GlobalValue::CommonLinkage, 
-      ConstantInt::get(Int32Ty, 0), "__angora_indirect_call_site", 0, 
-      GlobalVariable::GeneralDynamicTLSModel, 0, false);
+                          M, Int32Ty, false, GlobalValue::CommonLinkage, 
+                          ConstantInt::get(Int32Ty, 0), "__angora_indirect_call_site", 0, 
+                          GlobalVariable::GeneralDynamicTLSModel, 0, false);
+
 
   if (FastMode) {
     AngoraMapPtr = new GlobalVariable(M, PointerType::get(Int8Ty, 0), false,
@@ -291,90 +290,54 @@ void AngoraLLVMPass::initVariables(Module &M) {
         new GlobalVariable(M, Int32Ty, false, GlobalValue::CommonLinkage,
                            ConstantInt::get(Int32Ty, 0), "__angora_prev_loc", 0,
                            GlobalVariable::GeneralDynamicTLSModel, 0, false);
-
-    Type *TraceCmpArgs[5] = {Int32Ty, Int32Ty, Int32Ty, Int64Ty, Int64Ty};
-    TraceCmpTy = FunctionType::get(Int32Ty, TraceCmpArgs, false);
-    TraceCmp = M.getOrInsertFunction("__angora_trace_cmp", TraceCmpTy);
-    if (Function *F = dyn_cast<Function>(TraceCmp)) {
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::NoUnwind);
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::ReadNone);
-      // F->addAttribute(1, Attribute::ZExt);
-    }
-
-    Type *TraceSwArgs[3] = {Int32Ty, Int32Ty, Int64Ty};
-    TraceSwTy = FunctionType::get(Int64Ty, TraceSwArgs, false);
-    TraceSw = M.getOrInsertFunction("__angora_trace_switch", TraceSwTy);
-    if (Function *F = dyn_cast<Function>(TraceSw)) {
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::NoUnwind);
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::ReadNone);
-      // F->addAttribute(LLVM_ATTRIBUTE_LIST::ReturnIndex, Attribute::ZExt);
-      // F->addAttribute(1, Attribute::ZExt);
-    }
+    GET_OR_INSERT_FUNCTION(TraceCmp, Int32Ty, "__angora_trace_cmp",
+                           {Int32Ty, Int32Ty, Int32Ty, Int64Ty, Int64Ty});
+    GET_OR_INSERT_FUNCTION(TraceSw, Int64Ty, "__angora_trace_switch",
+                           {Int32Ty, Int32Ty, Int64Ty});
 
   } else if (TrackMode) {
-    Type *TraceCmpTtArgs[8] = {Int32Ty, Int32Ty, Int32Ty, Int32Ty, Int32Ty,
-                               Int64Ty, Int64Ty, Int32Ty};
-    TraceCmpTtTy = FunctionType::get(VoidTy, TraceCmpTtArgs, false);
-    TraceCmpTT = M.getOrInsertFunction("__angora_trace_cmp_tt", TraceCmpTtTy);
-    if (Function *F = dyn_cast<Function>(TraceCmpTT)) {
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::NoUnwind);
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::ReadNone);
-    }
-
-    Type *TraceSwTtArgs[7] = {Int32Ty, Int32Ty, Int32Ty, Int32Ty,
-                              Int64Ty, Int32Ty, Int64PtrTy};
-    TraceSwTtTy = FunctionType::get(VoidTy, TraceSwTtArgs, false);
-    TraceSwTT = M.getOrInsertFunction("__angora_trace_switch_tt", TraceSwTtTy);
-    if (Function *F = dyn_cast<Function>(TraceSwTT)) {
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::NoUnwind);
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::ReadNone);
-    }
-
-    Type *TraceFnTtArgs[6] = {Int32Ty, Int32Ty, Int32Ty, Int32Ty, Int8PtrTy, Int8PtrTy};
-    TraceFnTtTy = FunctionType::get(VoidTy, TraceFnTtArgs, false);
-    TraceFnTT = M.getOrInsertFunction("__angora_trace_fn_tt", TraceFnTtTy);
-    if (Function *F = dyn_cast<Function>(TraceFnTT)) {
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::NoUnwind);
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::ReadOnly);
-    }
-
-    Type *TraceExploitTtArgs[6] = {Int32Ty, Int32Ty, Int32Ty, Int32Ty, Int32Ty, Int64Ty};
-    TraceExploitTtTy = FunctionType::get(VoidTy, TraceExploitTtArgs, false);
-    TraceExploitTT = M.getOrInsertFunction("__angora_trace_exploit_val_tt",
-                                           TraceExploitTtTy);
-    if (Function *F = dyn_cast<Function>(TraceExploitTT)) {
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::NoUnwind);
-      F->addAttribute(LLVM_ATTRIBUTE_LIST::FunctionIndex, Attribute::ReadNone);
-    }
+    GET_OR_INSERT_FUNCTION(
+        TraceCmpTT, VoidTy, "__angora_trace_cmp_tt",
+        {Int32Ty, Int32Ty, Int32Ty, Int32Ty, Int32Ty, Int64Ty, Int64Ty, Int32Ty})
+    GET_OR_INSERT_FUNCTION(
+        TraceSwTT, VoidTy, "__angora_trace_switch_tt",
+        {Int32Ty, Int32Ty, Int32Ty, Int32Ty, Int64Ty, Int32Ty, Int64PtrTy})
+    GET_OR_INSERT_FUNCTION(TraceFnTT, VoidTy, "__angora_trace_fn_tt",
+                           {Int32Ty, Int32Ty, Int32Ty, Int32Ty, Int8PtrTy, Int8PtrTy})
+    GET_OR_INSERT_FUNCTION(TraceExploitTT, VoidTy,
+                           "__angora_trace_exploit_val_tt",
+                           {Int32Ty, Int32Ty, Int32Ty, Int32Ty, Int32Ty, Int64Ty})
   }
 
   std::vector<std::string> AllABIListFiles;
   AllABIListFiles.insert(AllABIListFiles.end(), ClABIListFiles.begin(),
                          ClABIListFiles.end());
-  ABIList.set(SpecialCaseList::createOrDie(AllABIListFiles));
+  ABIList.set(
+      SpecialCaseList::createOrDie(AllABIListFiles, *vfs::getRealFileSystem()));
 
   std::vector<std::string> AllExploitListFiles;
   AllExploitListFiles.insert(AllExploitListFiles.end(),
                              ClExploitListFiles.begin(),
                              ClExploitListFiles.end());
-  ExploitList.set(SpecialCaseList::createOrDie(AllExploitListFiles));
+  ExploitList.set(SpecialCaseList::createOrDie(AllExploitListFiles,
+                                               *vfs::getRealFileSystem()));
 
   gen_id_random = !!getenv(GEN_ID_RANDOM_VAR);
   output_cond_loc = !!getenv(OUTPUT_COND_LOC_VAR);
 
   num_fn_ctx = -1;
-  char* custom_fn_ctx = getenv(CUSTOM_FN_CTX);
+  char *custom_fn_ctx = getenv(CUSTOM_FN_CTX);
   if (custom_fn_ctx) {
     num_fn_ctx = atoi(custom_fn_ctx);
     if (num_fn_ctx < 0 || num_fn_ctx >= 32) {
-      errs() << "custom context should be: >= 0 && < 32 \n"; 
+      errs() << "custom context should be: >= 0 && < 32 \n";
       exit(1);
     }
   }
 
   if (num_fn_ctx == 0) {
     errs() << "disable context\n";
-  } 
+  }
 
   if (num_fn_ctx > 0) {
     errs() << "use custom function call context: " << num_fn_ctx << "\n";
@@ -394,7 +357,7 @@ void AngoraLLVMPass::initVariables(Module &M) {
 void AngoraLLVMPass::countEdge(Module &M, BasicBlock &BB) {
   if (!FastMode || skipBasicBlock())
     return;
-  
+
   // LLVMContext &C = M.getContext();
   unsigned int cur_loc = getRandomBasicBlockId();
   ConstantInt *CurLoc = ConstantInt::get(Int32Ty, cur_loc);
@@ -431,8 +394,10 @@ void AngoraLLVMPass::countEdge(Module &M, BasicBlock &BB) {
 
   // Implementation of Never-zero counter
   // The idea is from Marc and Heiko in AFLPlusPlus
-  // Reference: : https://github.com/vanhauser-thc/AFLplusplus/blob/master/llvm_mode/README.neverzero and https://github.com/vanhauser-thc/AFLplusplus/issues/10
-    
+  // Reference: :
+  // https://github.com/vanhauser-thc/AFLplusplus/blob/master/llvm_mode/README.neverzero
+  // and https://github.com/vanhauser-thc/AFLplusplus/issues/10
+
   Value *IncRet = IRB.CreateAdd(Counter, ConstantInt::get(Int8Ty, 1));
   setValueNonSan(IncRet);
   Value *IsZero = IRB.CreateICmpEQ(IncRet, ConstantInt::get(Int8Ty, 0));
@@ -465,10 +430,10 @@ void AngoraLLVMPass::countEdge(Module &M, BasicBlock &BB) {
   setInsNonSan(Store);
 };
 
-
 void AngoraLLVMPass::addFnWrap(Function &F) {
 
-  if (num_fn_ctx == 0) return;
+  if (num_fn_ctx == 0)
+    return;
 
   // *** Pre Fn ***
   BasicBlock *BB = &F.getEntryBlock();
@@ -478,7 +443,7 @@ void AngoraLLVMPass::addFnWrap(Function &F) {
   Value *CallSite = IRB.CreateLoad(AngoraCallSite);
   setValueNonSan(CallSite);
 
-  Value *OriCtxVal =IRB.CreateLoad(AngoraContext);
+  Value *OriCtxVal = IRB.CreateLoad(AngoraContext);
   setValueNonSan(OriCtxVal);
 
   // ***** Add Context *****
@@ -499,7 +464,6 @@ void AngoraLLVMPass::addFnWrap(Function &F) {
   StoreInst *SaveCtx = IRB.CreateStore(UpdatedCtx, AngoraContext);
   setInsNonSan(SaveCtx);
 
-  
   // *** Post Fn ***
   for (auto bb = F.begin(); bb != F.end(); bb++) {
     BasicBlock *BB = &(*bb);
@@ -508,23 +472,23 @@ void AngoraLLVMPass::addFnWrap(Function &F) {
       // ***** Reload Context *****
       IRBuilder<> Post_IRB(Inst);
       Post_IRB.CreateStore(OriCtxVal, AngoraContext)
-           ->setMetadata(NoSanMetaId, NoneMetaNode);
-      // ParmeSan: Reset ParmeSanIndCallSite to 0
+          ->setMetadata(NoSanMetaId, NoneMetaNode);
       resetIndirectCallContext(&Post_IRB);
     }
   }
 }
 
 void AngoraLLVMPass::resetIndirectCallContext(IRBuilder<> *IRB) {
-      //IRBuilder<> Post_IRB(Inst);
-      Constant* NonIndCallSite = ConstantInt::get(Int32Ty, 0);
-      StoreInst *SI = IRB->CreateStore(NonIndCallSite, ParmeSanIndCallSite);
-      SI->setMetadata(NoSanMetaId, NoneMetaNode);
-      setInsNonSan(SI);
+  //IRBuilder<> Post_IRB(Inst);
+  Constant* NonIndCallSite = ConstantInt::get(Int32Ty, 0);
+  StoreInst *SI = IRB->CreateStore(NonIndCallSite, ParmeSanIndCallSite);
+  SI->setMetadata(NoSanMetaId, NoneMetaNode);
+  setInsNonSan(SI);
 }
 
+
 void AngoraLLVMPass::processCall(Instruction *Inst) {
-  
+
   Function *fp;
   if (isa<CallInst>(Inst)){
     CallInst *CI = dyn_cast<CallInst>(Inst);
@@ -538,30 +502,30 @@ void AngoraLLVMPass::processCall(Instruction *Inst) {
     visitExploitation(Inst);
   }
 
+
   //  if (ABIList.isIn(*Callee, "uninstrumented"))
   //  return;
   u32 csid = getRandomContextId(); 
   Constant* CallSite = ConstantInt::get(Int32Ty, csid);
   IRBuilder<> IRB(Inst);
+
   if (num_fn_ctx != 0) {
-    IRB.CreateStore(CallSite, AngoraCallSite)->setMetadata(NoSanMetaId, NoneMetaNode);
+    IRBuilder<> IRB(Inst);
+    Constant *CallSite = ConstantInt::get(Int32Ty, getRandomContextId());
+    IRB.CreateStore(CallSite, AngoraCallSite)
+        ->setMetadata(NoSanMetaId, NoneMetaNode);
   }
-
-  // Store ParmeSan call site
   if (fp == NULL) {
-
     IRB.CreateStore(CallSite, ParmeSanIndCallSite)->setMetadata(NoSanMetaId, NoneMetaNode);
   }
 }
-
-
 
 void AngoraLLVMPass::visitCallInst(Instruction *Inst) {
 
   CallInst *Caller = dyn_cast<CallInst>(Inst);
   Function *Callee = Caller->getCalledFunction();
 
-  if ((Callee && Callee->isIntrinsic()) || isa<InlineAsm>(Caller->getCalledValue())) {
+  if ((Callee && Callee->isIntrinsic()) || isa<InlineAsm>(Caller->getCalledOperand())) {
     return;
   }
 
@@ -582,7 +546,7 @@ void AngoraLLVMPass::visitInvokeInst(Instruction *Inst) {
   Function *Callee = Caller->getCalledFunction();
 
   if (!Callee || Callee->isIntrinsic() ||
-      isa<InlineAsm>(Caller->getCalledValue())) {
+      isa<InlineAsm>(Caller->getCalledOperand())) {
     return;
   }
 
@@ -623,10 +587,10 @@ void AngoraLLVMPass::visitCompareFunc(Instruction *Inst) {
 
   LoadInst *CallSite = IRB.CreateLoad(ParmeSanIndCallSite);
   setInsNonSan(CallSite);
+
   CallInst *ProxyCall =
       IRB.CreateCall(TraceFnTT, {Cid, CurCtx, CallSite, ArgSize, OpArg[0], OpArg[1]});
   setInsNonSan(ProxyCall);
-  //resetIndirectCallContext(&IRB);
 }
 
 Value *AngoraLLVMPass::castArgType(IRBuilder<> &IRB, Value *V) {
@@ -720,9 +684,9 @@ void AngoraLLVMPass::processCmp(Instruction *Cond, Constant *Cid,
     LoadInst *CurCtx = IRB.CreateLoad(AngoraContext);
     setInsNonSan(CurCtx);
 
-    // TODO: ParmeSan
     LoadInst *CallSite = IRB.CreateLoad(ParmeSanIndCallSite);
     setInsNonSan(CallSite);
+
     CallInst *ProxyCall =
         IRB.CreateCall(TraceCmpTT, {Cid, CurCtx, CallSite, SizeArg, TypeArg, OpArg[0],
                                     OpArg[1], CondExt});
@@ -892,6 +856,9 @@ void AngoraLLVMPass::visitExploitation(Instruction *Inst) {
           int size = ParamVal->getType()->getScalarSizeInBits() / 8;
           if (ParamType->isPointerTy()) {
             size = 8;
+            // Hardware-wise, a pointer is an int64, no big deal.
+            // This explict cast is to make llvm backend happy.
+            ParamVal = IRB.CreatePtrToInt(ParamVal, Int64Ty);
           } else if (!ParamType->isIntegerTy(64)) {
             ParamVal = IRB.CreateZExt(ParamVal, Int64Ty);
           }
@@ -900,12 +867,12 @@ void AngoraLLVMPass::visitExploitation(Instruction *Inst) {
           if (TrackMode) {
             LoadInst *CurCtx = IRB.CreateLoad(AngoraContext);
             setInsNonSan(CurCtx);
+            
             LoadInst *CallSite = IRB.CreateLoad(ParmeSanIndCallSite);
             setInsNonSan(CallSite);
             CallInst *ProxyCall = IRB.CreateCall(
                 TraceExploitTT, {Cid, CurCtx, CallSite, SizeArg, TypeArg, ParamVal});
             setInsNonSan(ProxyCall);
-            //resetIndirectCallContext(&IRB);
           }
         }
       }
@@ -989,7 +956,6 @@ static RegisterPass<AngoraLLVMPass> X("angora_llvm_pass", "Angora LLVM Pass",
 static RegisterStandardPasses
     RegisterAngoraLLVMPass(PassManagerBuilder::EP_OptimizerLast,
                            registerAngoraLLVMPass);
-
 static RegisterStandardPasses
     RegisterAngoraLLVMPass0(PassManagerBuilder::EP_EnabledOnOptLevel0,
                             registerAngoraLLVMPass);

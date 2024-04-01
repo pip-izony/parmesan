@@ -10,7 +10,6 @@ lazy_static! {
     static ref LC: Mutex<Option<Logger>> = Mutex::new(Some(Logger::new()));
 }
 
-
 fn infer_eq_sign(op: u32, lb1: u32, lb2: u32) -> u32 {
     if op == defs::COND_ICMP_EQ_OP
         && ((lb1 > 0 && tag_set_wrap::tag_set_get_sign(lb1 as usize))
@@ -46,7 +45,6 @@ pub extern "C" fn __dfsw___angora_trace_cmp_tt(
     cmpid: u32,
     context: u32,
     last_callsite: u32,
-    //dominates_callsite: u32,
     size: u32,
     op: u32,
     arg1: u64,
@@ -232,7 +230,7 @@ pub extern "C" fn __angora_trace_exploit_val_tt(
     _last_callsite: u32,
     _c: u32,
     _d: u32,
-    _e: u64,
+    _e: u64
 ) {
     panic!("Forbid calling __angora_trace_exploit_val_tt directly");
 }
@@ -260,7 +258,6 @@ pub extern "C" fn __dfsw___angora_trace_exploit_val_tt(
     log_cmp_callsite(cmpid, context, last_callsite,  defs::COND_FALSE_ST, op, size, lb, 0, val, 0);
 }
 
-
 #[allow(dead_code)]
 #[inline]
 fn log_cmp(
@@ -277,8 +274,6 @@ fn log_cmp(
 
     log_cmp_callsite(cmpid, context, 0, condition, op, size, lb1, lb2, arg1, arg2)
 }
-
-
 #[inline]
 fn log_cmp_callsite(
     cmpid: u32,
@@ -292,6 +287,7 @@ fn log_cmp_callsite(
     arg1: u64,
     arg2: u64,
 ) {
+
     let cond = CondStmtBase {
         cmpid,
         context,
@@ -307,7 +303,6 @@ fn log_cmp_callsite(
         arg1,
         arg2,
     };
-    //println!("[CMP] id: {}, ctx: {}, last_callsite: {}", cmpid, context, last_callsite);
     let mut lcl = LC.lock().expect("Could not lock LC.");
     if let Some(ref mut lc) = *lcl {
         lc.save(cond);

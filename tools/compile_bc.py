@@ -22,21 +22,24 @@ def run_cmd(cmd):
     os.system(cmd)
 
 def build_pipeline(bc_file, target_flags="@@", profiling_input_dir="in", is_cpp=False):
+    library_link = ""
+    if "-lib=" in target_flags:
+        target_flags, library_link = target_flags.split("-lib=")[0], target_flags.split("-lib=")[1]
     compiler = CXX_BIN if is_cpp else CC_BIN
     cflags = CXXFLAGS if is_cpp else CFLAGS
     name = os.path.splitext(bc_file)[0]
     sanitizer = "address"
     targets_file = "targets.json"
     #1) BUILD FAST LL
-    run_cmd(f"USE_FAST=1 {compiler} {cflags} -S -emit-llvm -o {name}.fast.ll {bc_file}")
+    run_cmd(f"USE_FAST=1 {compiler} {cflags} -S -emit-llvm -o {name}.fast.ll {bc_file} {library_link}")
     #2) BUILD FAST BIN
-    run_cmd(f"USE_FAST=1 {compiler} {cflags} -o {name}.fast {bc_file}")
+    run_cmd(f"USE_FAST=1 {compiler} {cflags} -o {name}.fast {bc_file} {library_link}")
     #3) BUILD FAST SAN LL
-    run_cmd(f"USE_FAST=1 {compiler} {cflags} -fsanitize={sanitizer} -S -emit-llvm -o {name}.san.ll {bc_file}")
+    run_cmd(f"USE_FAST=1 {compiler} {cflags} -fsanitize={sanitizer} -S -emit-llvm -o {name}.san.ll {bc_file} {library_link}")
     #4) BUILD FAST SAN BIN
-    run_cmd(f"USE_FAST=1 {compiler} {cflags} -fsanitize={sanitizer} -o {name}.san.fast {bc_file}")
+    run_cmd(f"USE_FAST=1 {compiler} {cflags} -fsanitize={sanitizer} -o {name}.san.fast {bc_file} {library_link}")
     #5) BUILD TRACK BIN
-    run_cmd(f"USE_TRACK=1 {compiler} {cflags} -o {name}.track {bc_file}")
+    run_cmd(f"USE_TRACK=1 {compiler} {cflags} -o {name}.track {bc_file} {library_link}")
     #6) Gather targets.json and target.diff
     run_cmd(f"{DIFF_BIN} -json {name}.fast.ll {name}.san.ll 2> {name}.diff")
     #7) Gather cmp.map
@@ -52,7 +55,7 @@ def build_pipeline(bc_file, target_flags="@@", profiling_input_dir="in", is_cpp=
     print()
 
 def print_usage():
-    print(f"Usage: {sys.argv[0]} BC_FILE [TARGET_PROG_CMD_FLAGS]")
+    print(f"Usage: {sys.argv[0]} BC_FILE [TARGET_PROG_CMD_FLAGS] [-lib=\"LIBRARY_PATH\"]")
     print("Where the BC_FILE is an llvm .bc file obtained by, for example, gclang.")
 
 if __name__ == "__main__":

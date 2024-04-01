@@ -87,7 +87,7 @@ std::set<std::string> TraceFunctions = {"__angora_trace_cmp", "__angora_trace_sw
 Type *VoidTy;
 IntegerType *Int32Ty;
 FunctionType *ParmeSanDummyCallTy;
-Constant *ParmeSanDummyCall;
+FunctionCallee ParmeSanDummyCall;
 
 void IDAssigner::collectCallSiteDominators(Function *F) {
     for (auto &BB : *F) {
@@ -145,7 +145,7 @@ IDAssigner::CmpIdType IDAssigner::getAngoraCmpIdForBB(BasicBlock *BB) {
 }
 
 bool IDAssigner::runOnModule(Module &M) {
-  IdentifierGenerator = make_unique<IDGenerator>();
+  IdentifierGenerator = std::make_unique<IDGenerator>();
 
 
   std::set<IDAssigner::IdentifierType> cmpBbSet;
@@ -174,7 +174,7 @@ bool IDAssigner::runOnModule(Module &M) {
       for (auto &I : BB) {
           if (CallInst *callInst = dyn_cast<CallInst>(&I)) {
               if (Function *calledFunction = callInst->getCalledFunction()) {
-                  if (TraceFunctions.count(calledFunction->getName()) == 0)
+                  if (TraceFunctions.count(std::string(calledFunction->getName())) == 0)
                           continue;
 
                   auto argIndex = 1;

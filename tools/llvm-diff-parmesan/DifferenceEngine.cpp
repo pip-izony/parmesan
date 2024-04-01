@@ -18,10 +18,10 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/IR/CFG.h"
-#include "llvm/IR/CallSite.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -68,7 +68,7 @@ public:
     unsigned NewSize = Storage.size() - 1;
     if (NewSize) {
       // Move the slot at the end to the beginning.
-      if (isPodLike<T>::value)
+      if (is_trivially_copyable<T>::value)
         Storage[0] = Storage[NewSize];
       else
         std::swap(Storage[0], Storage[NewSize]);
@@ -223,23 +223,25 @@ class FunctionDifferenceEngine {
   bool matchForBlockDiff(Instruction *L, Instruction *R);
   void runBlockDiff(BasicBlock::iterator LI, BasicBlock::iterator RI);
 
-  bool diffCallSites(CallSite L, CallSite R, bool Complain) {
+  bool diffCallSites(CallBase *L, CallBase *R, bool Complain) {
     // FIXME: call attributes
-    if (!equivalentAsOperands(L.getCalledValue(), R.getCalledValue())) {
+    if (!equivalentAsOperands(L->getCalledOperand(), R->getCalledOperand())) {
       if (Complain) Engine.log("called functions differ");
       return true;
     }
-    if (L.arg_size() != R.arg_size()) {
+    if (L->arg_size() != R->arg_size()) {
       if (Complain) Engine.log("argument counts differ");
       return true;
     }
-    for (unsigned I = 0, E = L.arg_size(); I != E; ++I)
-      if (!equivalentAsOperands(L.getArgument(I), R.getArgument(I))) {
+
+    for (unsigned I = 0, E = L->arg_size(); I != E; ++I) {
+      if (!equivalentAsOperands(L->getArgOperand(I), R->getArgOperand(I))) {
         if (Complain)
           Engine.logf("arguments %l and %r differ")
-            << L.getArgument(I) << R.getArgument(I);
+            << L->getArgOperand(I) << R->getArgOperand(I);
         return true;
       }
+    }
     return false;
   }
 
@@ -259,7 +261,7 @@ class FunctionDifferenceEngine {
         return true;
       }
     } else if (isa<CallInst>(L)) {
-      return diffCallSites(CallSite(L), CallSite(R), Complain);
+      return diffCallSites(dyn_cast<CallBase>(L), dyn_cast<CallBase>(R), Complain);
     } else if (isa<PHINode>(L)) {
       // FIXME: implement.
 
@@ -276,7 +278,7 @@ class FunctionDifferenceEngine {
     } else if (isa<InvokeInst>(L)) {
       InvokeInst *LI = cast<InvokeInst>(L);
       InvokeInst *RI = cast<InvokeInst>(R);
-      if (diffCallSites(CallSite(LI), CallSite(RI), Complain))
+      if (diffCallSites(dyn_cast<CallBase>(L), dyn_cast<CallBase>(R), Complain))
         return true;
 
       if (TryUnify) {
@@ -629,8 +631,8 @@ void FunctionDifferenceEngine::runBlockDiff(BasicBlock::iterator LStart,
   // If the terminators have different kinds, but one is an invoke and the
   // other is an unconditional branch immediately following a call, unify
   // the results and the destinations.
-  TerminatorInst *LTerm = LStart->getParent()->getTerminator();
-  TerminatorInst *RTerm = RStart->getParent()->getTerminator();
+  Instruction *LTerm = LStart->getParent()->getTerminator();
+  Instruction *RTerm = RStart->getParent()->getTerminator();
   if (isa<BranchInst>(LTerm) && isa<InvokeInst>(RTerm)) {
     if (cast<BranchInst>(LTerm)->isConditional()) return;
     BasicBlock::iterator I = LTerm->getIterator();
@@ -639,7 +641,7 @@ void FunctionDifferenceEngine::runBlockDiff(BasicBlock::iterator LStart,
     if (!isa<CallInst>(*I)) return;
     CallInst *LCall = cast<CallInst>(&*I);
     InvokeInst *RInvoke = cast<InvokeInst>(RTerm);
-    if (!equivalentAsOperands(LCall->getCalledValue(), RInvoke->getCalledValue()))
+    if (!equivalentAsOperands(LCall->getCalledOperand(), RInvoke->getCalledOperand()))
       return;
     if (!LCall->use_empty())
       Values[LCall] = RInvoke;
@@ -652,7 +654,7 @@ void FunctionDifferenceEngine::runBlockDiff(BasicBlock::iterator LStart,
     if (!isa<CallInst>(*I)) return;
     CallInst *RCall = cast<CallInst>(I);
     InvokeInst *LInvoke = cast<InvokeInst>(LTerm);
-    if (!equivalentAsOperands(LInvoke->getCalledValue(), RCall->getCalledValue()))
+    if (!equivalentAsOperands(LInvoke->getCalledOperand(), RCall->getCalledOperand()))
       return;
     if (!LInvoke->use_empty())
       Values[LInvoke] = RCall;

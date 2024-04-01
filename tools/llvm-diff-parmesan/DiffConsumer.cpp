@@ -56,10 +56,10 @@ void DiffConsumer::printValue(Value *V, bool isL) {
       printValue(SI->getPointerOperand(), isL);
     } else if (auto *CI = dyn_cast<CallInst>(V)) {
       out << "call to ";
-      printValue(CI->getCalledValue(), isL);
+      printValue(CI->getCalledOperand(), isL);
     } else if (auto *II = dyn_cast<InvokeInst>(V)) {
       out << "invoke to ";
-      printValue(II->getCalledValue(), isL);
+      printValue(II->getCalledOperand(), isL);
     } else {
       out << *V;
     }

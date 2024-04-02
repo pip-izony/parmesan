@@ -1,6 +1,6 @@
 use crate::stats::*;
 use crate::dyncfg::{cfg::ControlFlowGraph, fparse::parse_targets_file};
-use angora_common::defs;
+use angora_common::{config, defs};
 use chrono::prelude::Local;
 use std::{
     collections::HashMap,
@@ -85,6 +85,7 @@ pub fn fuzz_main(
             "Please ensure that seed directory - {:?} has any file.",
             depot.dirs.seeds_dir
         );
+        error!("Please ensure that the seed file's length is less than {}.", config::MAX_INPUT_LEN);
         panic!();
     }
 

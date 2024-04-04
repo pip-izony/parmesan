@@ -51,6 +51,9 @@ def build_pipeline(bc_file, target_flags="@@", profiling_input_dir="in", is_cpp=
     # Print fuzzing command
     print("You can now run your target application (with SanOpt enabled) using:")
     print()
+    # This is for the case where the command is stdin (e.g., ./my_prog < input_file)
+    if "<" in target_flags:
+        target_flags = target_flags.split("<")[0] + "\"<" + target_flags.split("<")[1] + "\""
     print(f"{FUZZER_PATH} -c ./targets.pruned.json -i {profiling_input_dir} -o out -t ./{name}.track -s ./{name}.san.fast -- ./{name}.fast {target_flags}")
     print()
 
